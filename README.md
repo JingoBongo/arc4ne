@@ -20,3 +20,5 @@ for what another version of RC4 was used, there is an option to disable 'scrypt'
 
 Science paper link
 https://wiki-files.aircrack-ng.org/doc/technique_papers/rc4_ksaproc.pdf
+
+The only additional packet used is 'scrypt', but the code can be modified to work without it in a minuite. 
