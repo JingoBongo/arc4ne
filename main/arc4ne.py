@@ -15,7 +15,6 @@ import time
 import scrypt
 
 
-
 def sstr(s):
     new = ""
     for x in s:
@@ -26,11 +25,18 @@ def sstr(s):
 class Arc4ne:
     def __init__(self):
         self.__init_private_vars()
+        self.__use_scrypt = True
+
+    def use_scrypt(self, bl):
+        if isinstance(bl, bool) and bl is not None:
+            self.__use_scrypt = bl
+        else:
+            raise Exception('Provide proper boolean!')
 
     def __init_private_vars(self):
         self.__plain_key = None
         self.__key_stage1_fragment = 'hesoyam'
-        self.__key_stage2_fragment = 'uzumymw'
+        self.__odd_reverse_key_fragment = '3'
 
     def set_key(self, k):
         if isinstance(k, str) and k is not None:
@@ -102,7 +108,7 @@ class Arc4ne:
     def stage2_decrypt(self, plain_text, key):
         return scrypt.decrypt(plain_text, key)
 
-    def __complete_timestamp(self, ts):
+    def __complete_timestamp_to_18(self, ts):
         length = len(ts)
         if length == 18:
             pass
@@ -114,43 +120,8 @@ class Arc4ne:
             raise Exception(f'Length of %s was %i' % (ts, length))
         return ts
 
-    def encrypt(self, plain_text):
-        # this will be the main method
-        # here I will make a step by step layered encryption
-        # fist we need to make sure the key exists and the plain text is a plain text
-        # this algorithm is for string encryption primarily and its success with other types will not be tested
-        self.__check_plain_key()
-        self.check_plain_text(plain_text)
-        # during encryption time should be taken
-        timestamp = time.time()
-        reverse_plain_key = self.__plain_key[::-1]
-        ciphered_time_stamp_pre1 = self.stage1_encrypt(timestamp, reverse_plain_key)
-        ciphered_time_stamp = self.__complete_timestamp(ciphered_time_stamp_pre1)
-        stage1_key = self.__key_stage1_fragment + self.__plain_key + ciphered_time_stamp
-        stage1_ciphered = self.stage1_encrypt(plain_text, stage1_key)
-        # end of stage 1
-        # we put ciphered timestamp before last character of stage1 ciphered
-        stage2_plain = stage1_ciphered[:-1] + ciphered_time_stamp + stage1_ciphered[-1:]
-
-        # now we use scrypt to encrypt stage 2, key will be plain key
-        stage2_ciphered = self.stage2_ecnrypt(stage2_plain, self.__plain_key)
-        return stage2_ciphered
-
-
-
-
-    def decrypt(self, ciphered_text):
-        stage2_plain = self.stage2_decrypt(ciphered_text, self.__plain_key)
-        reverse_plain_key = self.__plain_key[::-1]
-        stage1_ciphered = stage2_plain[:-19] + stage2_plain[-1]
-        stage1_ciphered_timestamp = stage2_plain[-19:][:-1]
-        # time to clear timestamp
-        stage1_shortened_timestamp = self.__shorten_timestamp(stage1_ciphered_timestamp)
-        # timestamp = self.stage2_decrypt(stage1_ciphered_timestamp, reverse_plain_key)
-        stage1_key = self.__key_stage1_fragment + self.__plain_key + stage1_shortened_timestamp
-        stage1_plain_text = self.stage1_decrypt(stage1_ciphered, stage1_key)
-        return stage1_plain_text
-
+    def __complete_key_to_odd(self, key):
+        return (key + key[-1:])
 
     def __shorten_timestamp(self, stage1_ciphered_timestamp):
         data = stage1_ciphered_timestamp
@@ -163,6 +134,54 @@ class Arc4ne:
             data = data[:-1]
         return data
 
+    def __check_and_fix_key_length(self, key):
+        if not self.is_odd(key):
+            return self.__complete_key_to_odd(key)
+        return key
+
+    def encrypt(self, plain_text):
+        # this will be the main method
+        # here I will make a step by step layered encryption
+        # fist we need to make sure the key exists and the plain text is a plain text
+        # this algorithm is for string encryption primarily and its success with other types will not be tested
+        self.__check_plain_key()
+        self.check_plain_text(plain_text)
+        # during encryption time should be taken
+        timestamp = time.time()
+        reverse_plain_pre_key = self.__plain_key[::-1]
+        # boi o boi, i forgot about odd checks
+        reverse_plain_key = self.__check_and_fix_key_length(reverse_plain_pre_key)
+        ciphered_time_stamp_pre1 = self.stage1_encrypt(timestamp, reverse_plain_key)
+        ciphered_time_stamp = self.__complete_timestamp_to_18(ciphered_time_stamp_pre1)
+
+        stage1_pre_key = self.__key_stage1_fragment + self.__plain_key + ciphered_time_stamp
+        stage1_key = self.__check_and_fix_key_length(stage1_pre_key)
+        stage1_ciphered = self.stage1_encrypt(plain_text, stage1_key)
+        # end of stage 1
+        # we put ciphered timestamp before last character of stage1 ciphered
+        stage2_plain = stage1_ciphered[:-1] + ciphered_time_stamp + stage1_ciphered[-1:]
+
+        # now we use scrypt to encrypt stage 2, key will be plain key
+        if self.__use_scrypt:
+            stage2_ciphered = self.stage2_ecnrypt(stage2_plain, self.__plain_key)
+            return stage2_ciphered
+        else:
+            return stage2_plain
+
+    def decrypt(self, ciphered_text):
+        if self.__use_scrypt:
+            stage2_plain = self.stage2_decrypt(ciphered_text, self.__plain_key)
+        else:
+            stage2_plain = ciphered_text
+
+        stage1_ciphered = stage2_plain[:-19] + stage2_plain[-1]
+        stage1_ciphered_timestamp = stage2_plain[-19:][:-1]
+        # time to clear timestamp
+        stage1_shortened_timestamp = self.__shorten_timestamp(stage1_ciphered_timestamp)
+        stage1_pre_key = self.__key_stage1_fragment + self.__plain_key + stage1_shortened_timestamp
+        stage1_key = self.__check_and_fix_key_length(stage1_pre_key)
+        stage1_plain_text = self.stage1_decrypt(stage1_ciphered, stage1_key)
+        return stage1_plain_text
 
 
 def main():
@@ -170,6 +189,7 @@ def main():
     key = 'unlock me_123'
     alg = Arc4ne()
     alg.set_key(key)
+    alg.use_scrypt(True)
 
     print('Msg: %s' % msg)
     print('Key: %s' % key)
