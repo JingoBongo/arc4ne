@@ -24,15 +24,13 @@ def sstr(s):
 
 
 class Arc4ne:
-
     def __init__(self):
-        self.__plain_key = None
         self.__init_private_vars()
 
     def __init_private_vars(self):
+        self.__plain_key = None
         self.__key_stage1_fragment = 'hesoyam'
         self.__key_stage2_fragment = 'uzumymw'
-        self.__xor_key = 'lupa'
 
     def set_key(self, k):
         if isinstance(k, str) and k is not None:
@@ -47,7 +45,7 @@ class Arc4ne:
         S = list(range(256))
         j = 0
         out = []
-        data = plain_text
+        data = str(plain_text)
 
         # KSA Phases
         for i in range(256):
@@ -98,24 +96,23 @@ class Arc4ne:
             return True
         return False
 
-    def base64_encode(self, plain):
-        # return ''.join(chr(ord(a) ^ ord(b)) for a, b in zip(plain, key))
-        return plain.encode("utf-8")
-
-    def base64_decode(self, encoded):
-        return encoded.decode("utf-8")
-
-    def ascii_encode(self, plain):
-        return plain.encode('ascii')
-
-    def ascii_decode(self, encoded):
-        return encoded.decode('ascii')
-
     def stage2_ecnrypt(self, plain_text, key):
         return scrypt.encrypt(plain_text, key)
 
     def stage2_decrypt(self, plain_text, key):
         return scrypt.decrypt(plain_text, key)
+
+    def __complete_timestamp(self, ts):
+        length = len(ts)
+        if length == 18:
+            pass
+        elif length == 17:
+            ts = ts + ts[-1:]
+        elif length == 16:
+            ts = ts + ts[-2:]
+        else:
+            raise Exception(f'Length of %s was %i' % (ts, length))
+        return ts
 
     def encrypt(self, plain_text):
         # this will be the main method
@@ -124,75 +121,63 @@ class Arc4ne:
         # this algorithm is for string encryption primarily and its success with other types will not be tested
         self.__check_plain_key()
         self.check_plain_text(plain_text)
-        print('breakpoint')
         # during encryption time should be taken
         timestamp = time.time()
-        # this timestamp will be used to change the plain_key in such way that every time user encrypts the same
-        # message the ciphered result will be different. therefore we create key_pre_stage1 variable
-        key_pre_stage1 = str(timestamp) + ':' + self.__plain_key
-        print('breakpoint')
-        # second stage will be modifying the length (of key stage 1) in such way that it is not power of 2
-        # therefore making key_pre_stage1_2 var. checking its length. if it is odd, we are adding last char from the key
-        # at the end. therefore adding random int variable
+        reverse_plain_key = self.__plain_key[::-1]
+        ciphered_time_stamp_pre1 = self.stage1_encrypt(timestamp, reverse_plain_key)
+        ciphered_time_stamp = self.__complete_timestamp(ciphered_time_stamp_pre1)
+        stage1_key = self.__key_stage1_fragment + self.__plain_key + ciphered_time_stamp
+        stage1_ciphered = self.stage1_encrypt(plain_text, stage1_key)
+        # end of stage 1
+        # we put ciphered timestamp before last character of stage1 ciphered
+        stage2_plain = stage1_ciphered[:-1] + ciphered_time_stamp + stage1_ciphered[-1:]
 
-        # redacted, found that adding a random fragment changes the length !!!! change comments later
-        key_pre_stage1_2 = key_pre_stage1 + self.__key_stage1_fragment
-        print('breakpoint')
-        # key should never be of length that is a power of 2, therefore always odd
-        if not self.is_odd(key_pre_stage1_2):
-            key_stage1 = key_pre_stage1_2 + key_pre_stage1_2[-1]
-        else:
-            key_stage1 = key_pre_stage1_2
-        print('breakpoint')
+        # now we use scrypt to encrypt stage 2, key will be plain key
+        stage2_ciphered = self.stage2_ecnrypt(stage2_plain, self.__plain_key)
+        return stage2_ciphered
 
 
 
-        # based on key stage 2 I want to generate a key for scrypt so that it is new every time as well, but
-        # not identical. therefore creating key_stage2 variable
-        #  !!! scratch that. I can't tell the user the new key, he should think that it is that old plain.
-        # therefore using plain_key + hardcoded stuff as key stage 3 for at least some diversity
-        key_stage2 = self.__key_stage2_fragment + self.__plain_key
-        print('breakpoint')
-        # time to start encryption finally!
-        # stage 1:
-        # REDACTED, update comments
-        stage1_cipher = self.stage1_encrypt(plain_text, key_stage1)
-        print('breakpoint')
-        # now we must hide key stage 1 to encrypt it together with ciphered text stage 1
-        stage2_plain_text = stage1_cipher+':'+str(self.base64_encode(key_pre_stage1))
-        print('breakpoint')
-        stage2_xored_text = self.base64_encode(stage2_plain_text)
-        print('breakpoint')
-        stage2_cipher = self.stage2_ecnrypt(stage2_xored_text, key_stage2)
-        print('breakpoint')
-        # the above should be our result
-
-        # TEMPORARY FOR DEBUGGING ONLY
-        self.stage2_xored_text = stage2_xored_text
-        self.stage2_plaint_text = stage2_plain_text
-        self.key_stage1 = key_stage1
-        self.key_stage2 = key_stage2
-        return stage2_cipher
 
     def decrypt(self, ciphered_text):
-        print('start debugging')
-        stage2_key = self.__key_stage2_fragment+self.__plain_key
-        print('breakpoint')
-        stage2_xored_plain = self.stage2_decrypt(ciphered_text, stage2_key)
-        print('breakpoint')
-        stage2_plain = self.base64_decode(stage2_xored_plain)
-        print('breakpoint')
-        stage2_text, stage1_key = stage2_plain.split(':')
-        print('breakpoint')
+        stage2_plain = self.stage2_decrypt(ciphered_text, self.__plain_key)
+        reverse_plain_key = self.__plain_key[::-1]
+        stage1_ciphered = stage2_plain[:-19] + stage2_plain[-1]
+        stage1_ciphered_timestamp = stage2_plain[-19:][:-1]
+        # time to clear timestamp
+        stage1_shortened_timestamp = self.__shorten_timestamp(stage1_ciphered_timestamp)
+        # timestamp = self.stage2_decrypt(stage1_ciphered_timestamp, reverse_plain_key)
+        stage1_key = self.__key_stage1_fragment + self.__plain_key + stage1_shortened_timestamp
+        stage1_plain_text = self.stage1_decrypt(stage1_ciphered, stage1_key)
+        return stage1_plain_text
+
+
+    def __shorten_timestamp(self, stage1_ciphered_timestamp):
+        data = stage1_ciphered_timestamp
+        last1_ts_char = data[-1]
+        last2_ts_char = data[-2]
+        last3_ts_char = data[-3]
+        if last1_ts_char == last2_ts_char == last3_ts_char:
+            data = data[:-2]
+        elif last1_ts_char == last2_ts_char:
+            data = data[:-1]
+        return data
 
 
 
 def main():
+    msg = 'very Importannnnnce 1232342342 message'
+    key = 'unlock me_123'
     alg = Arc4ne()
-    alg.set_key('thekey')
-    cipher = alg.encrypt('the secret message')
+    alg.set_key(key)
+
+    print('Msg: %s' % msg)
+    print('Key: %s' % key)
+
+    cipher = alg.encrypt(msg)
+    print('Ciphered: %s' % cipher)
     result = alg.decrypt(cipher)
-    print('zi ende')
+    print('Decoded: %s ' % result)
 
 
 if __name__ == "__main__":
