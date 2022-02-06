@@ -1,16 +1,30 @@
-# new day, new attempt. this one is called arc4ne, as A Rivest Cipher 4 Nephew
+"""
+New day, new attempt. This one is called arc4ne, as A Rivest Cipher 4 Nephew
 
-# according to paper  weak keys are the ones with length = power of 2. make key change that is not visible for end user
-# https://wiki-files.aircrack-ng.org/doc/technique_papers/rc4_ksaproc.pdf
-# "these weak keys have length which is divisible by some non-trivial power of two"
+This encryption algorithm follows the goal to be more secure than the original one.
+According to the science paper RC4 algorithm has a couple of known issues.
+If the key has the length divisible to some power of two it is easily breakable.
+Having the same key encrypting different messages also helps the attacker break the cipher.
 
-# also the method has a weakness while the key is constant. I want to add some data to the array with cur_date of ciphering
-# and then change the key accordingly, before changing key length. ""according to the same paper
-# here exactly I need that with same 'key' we were getting different results based on time
+First issue is solved by internally modifying the key in such way that it's length is always odd.
+Second issue requires key to be different every time encryption is happening, this is why timestamps are used together
+with traditional key in order to always have different keys. End user doesn't need to know anything about these internal
+processes and can be sure that he can use his key on one device for encryption and on other device for decryption
+without any issues.
 
-# maybe due to entire algorithm being based on xor operations I will keep the spirit and hide my metadata in xors as well
+In this algorithm modification I tried to cover these 2 vulnerabilities and added even additional layer of security.
+As an algorithm with 1 key this one can be brute forced without any serious issues (find examples in science work),
+that is why I added an external layer that uses 'scrypt' library. Its biggest upside for me is that it takes very long
+time to encrypt or decrypt messages compared to common algorithms, so arc4ne has scrypt encryption as upper layer.
+Having 'scrypt' allows to ignore brute force attacks, but if one wants to use arc4ne for wireless connection just like
+for what another version of RC4 was used, there is an option to disable 'scrypt' layer.
 
-# is there a chance to implement one way function on top of that all?
+Science paper link
+https://wiki-files.aircrack-ng.org/doc/technique_papers/rc4_ksaproc.pdf
+
+Is there a chance to implement one way function on top of that all? Long story short - no, without using other scripts
+I can't achieve this. And the scope of this work is improve specified algorithm - RC4
+"""
 import time
 import scrypt
 
@@ -35,8 +49,10 @@ class Arc4ne:
 
     def __init_private_vars(self):
         self.__plain_key = None
+        # yes, I wanted a hardcoded value on top of other manipulations just because I wanted so.
+        # in general we can add extra layers and add such mock values, but I wanted to cover general
+        # issues, not make a god cipher
         self.__key_stage1_fragment = 'hesoyam'
-        self.__odd_reverse_key_fragment = '3'
 
     def set_key(self, k):
         if isinstance(k, str) and k is not None:
@@ -47,7 +63,7 @@ class Arc4ne:
     def get_key(self):
         return self.__plain_key
 
-    def stage1_encrypt(self, plain_text, key):
+    def __stage1_encrypt(self, plain_text, key):
         S = list(range(256))
         j = 0
         out = []
@@ -68,7 +84,7 @@ class Arc4ne:
 
         return sstr(out)
 
-    def stage1_decrypt(self, ciphered_text, key):
+    def __stage1_decrypt(self, ciphered_text, key):
         S = list(range(256))
         j = 0
         out = []
@@ -93,19 +109,19 @@ class Arc4ne:
         if self.__plain_key is None:
             raise Exception('Before encrypting, first you will need to set the key! (obj.set_key("key"))')
 
-    def check_plain_text(self, plain_text):
+    def __check_plain_text(self, plain_text):
         if not (isinstance(plain_text, str) and plain_text is not None):
             raise Exception('Provide proper string as the plain text!')
 
-    def is_odd(self, string):
+    def __is_odd(self, string):
         if len(str(string)) % 2 == 1:
             return True
         return False
 
-    def stage2_ecnrypt(self, plain_text, key):
+    def __stage2_ecnrypt(self, plain_text, key):
         return scrypt.encrypt(plain_text, key)
 
-    def stage2_decrypt(self, plain_text, key):
+    def __stage2_decrypt(self, plain_text, key):
         return scrypt.decrypt(plain_text, key)
 
     def __complete_timestamp_to_18(self, ts):
@@ -135,70 +151,55 @@ class Arc4ne:
         return data
 
     def __check_and_fix_key_length(self, key):
-        if not self.is_odd(key):
+        if not self.__is_odd(key):
             return self.__complete_key_to_odd(key)
         return key
 
     def encrypt(self, plain_text):
         # this will be the main method
-        # here I will make a step by step layered encryption
-        # fist we need to make sure the key exists and the plain text is a plain text
         # this algorithm is for string encryption primarily and its success with other types will not be tested
+        # health checks.
         self.__check_plain_key()
-        self.check_plain_text(plain_text)
-        # during encryption time should be taken
+        self.__check_plain_text(plain_text)
+        # time stamp during encryption; combining it with plain_key assures that cipher will be unique each time
         timestamp = time.time()
+        # to encrypt timestamp I will use reversed plain_key
         reverse_plain_pre_key = self.__plain_key[::-1]
-        # boi o boi, i forgot about odd checks
+        # here and later, there will be checks for key to make sure they are of odd length
         reverse_plain_key = self.__check_and_fix_key_length(reverse_plain_pre_key)
-        ciphered_time_stamp_pre1 = self.stage1_encrypt(timestamp, reverse_plain_key)
+        ciphered_time_stamp_pre1 = self.__stage1_encrypt(timestamp, reverse_plain_key)
+        # I figured that length of timestamp is not more than 18, I will need this fixed length later
         ciphered_time_stamp = self.__complete_timestamp_to_18(ciphered_time_stamp_pre1)
 
         stage1_pre_key = self.__key_stage1_fragment + self.__plain_key + ciphered_time_stamp
         stage1_key = self.__check_and_fix_key_length(stage1_pre_key)
-        stage1_ciphered = self.stage1_encrypt(plain_text, stage1_key)
+        stage1_ciphered = self.__stage1_encrypt(plain_text, stage1_key)
         # end of stage 1
         # we put ciphered timestamp before last character of stage1 ciphered
         stage2_plain = stage1_ciphered[:-1] + ciphered_time_stamp + stage1_ciphered[-1:]
 
         # now we use scrypt to encrypt stage 2, key will be plain key
+        # at this stage we already have a ciphered text and there is an option to pass the 'scrypt' part
+        # Once again, 'scrypt' is for making it hard to brute force
         if self.__use_scrypt:
-            stage2_ciphered = self.stage2_ecnrypt(stage2_plain, self.__plain_key)
+            stage2_ciphered = self.__stage2_ecnrypt(stage2_plain, self.__plain_key)
             return stage2_ciphered
         else:
             return stage2_plain
 
     def decrypt(self, ciphered_text):
+        # health check.
+        self.__check_plain_key()
         if self.__use_scrypt:
-            stage2_plain = self.stage2_decrypt(ciphered_text, self.__plain_key)
+            stage2_plain = self.__stage2_decrypt(ciphered_text, self.__plain_key)
         else:
             stage2_plain = ciphered_text
 
+        # literally all the steps backwards
         stage1_ciphered = stage2_plain[:-19] + stage2_plain[-1]
         stage1_ciphered_timestamp = stage2_plain[-19:][:-1]
-        # time to clear timestamp
         stage1_shortened_timestamp = self.__shorten_timestamp(stage1_ciphered_timestamp)
         stage1_pre_key = self.__key_stage1_fragment + self.__plain_key + stage1_shortened_timestamp
         stage1_key = self.__check_and_fix_key_length(stage1_pre_key)
-        stage1_plain_text = self.stage1_decrypt(stage1_ciphered, stage1_key)
+        stage1_plain_text = self.__stage1_decrypt(stage1_ciphered, stage1_key)
         return stage1_plain_text
-
-
-def main():
-    msg = 'very Importannnnnce 1232342342 message'
-    key = 'unlock me_123'
-    alg = Arc4ne()
-    alg.set_key(key)
-    alg.use_scrypt(True)
-
-    print('Msg: %s' % msg)
-    print('Key: %s' % key)
-
-    cipher = alg.encrypt(msg)
-    print('Ciphered: %s' % cipher)
-    result = alg.decrypt(cipher)
-    print('Decoded: %s ' % result)
-
-
-if __name__ == "__main__":
-    main()
