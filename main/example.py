@@ -12,7 +12,12 @@ def main():
 
     cipher = alg.encrypt(msg)
     print('Ciphered: %s' % cipher)
-    result = alg.decrypt(cipher)
+
+    alg2 = arc4ne.Arc4ne()
+    alg2.set_key(key)
+    alg2.use_scrypt(False)
+
+    result = alg2.decrypt(cipher)
     print('Decoded: %s ' % result)
 
 
